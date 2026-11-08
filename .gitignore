@@ -1,0 +1,84 @@
+# ============================================================
+# Rust & Cargo Build Artifacts
+# ============================================================
+/target/
+**/*.rs.bk
+*.pdb
+*.rlib
+*.so
+*.dylib
+*.dll
+*.exe
+
+# (Optional: include or ignore Cargo.lock based on preference)
+Cargo.lock
+
+# ============================================================
+# Environment & Secrets (Crucial)
+# ============================================================
+.env
+.env.*
+!.env.example
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Google Cloud & OAuth Credential Files
+secret.json
+client_secret*.json
+credentials*.json
+token*.json
+oauth*.json
+*.pem
+*.key
+*.crt
+
+# ============================================================
+# Database & Persistence
+# ============================================================
+/data/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# ============================================================
+# Docker & Local Overrides
+# ============================================================
+docker-compose.override.yml
+*.log
+logs/
+
+# ============================================================
+# Operating System & IDE Files
+# ============================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+
+# Editors
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+*.bak
+tmp/
+.temp/

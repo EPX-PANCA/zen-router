@@ -1,0 +1,40 @@
+services:
+  zen-router:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zen-router
+    ports:
+      - "20128:20128"
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://9r.alinlab.cloud}
+      - PORT=20128
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - REDIRECT_URI=${REDIRECT_URI:-http://localhost:20128/api/oauth/callback}
+      - PROJECT_ID=${PROJECT_ID:-rising-fact-p41fc}
+      - DATABASE_URL=sqlite:/app/data/zen-router.db
+      - SESSION_SECRET=${SESSION_SECRET:-change-me-in-production-use-random-string}
+      - UPSTREAM_BASE_URL=${UPSTREAM_BASE_URL:-https://daily-cloudcode-pa.googleapis.com}
+      - UPSTREAM_LOCATION=${UPSTREAM_LOCATION:-us-central1}
+      - RUST_LOG=${RUST_LOG:-zen_router=info,tower_http=info}
+    volumes:
+      - zen-router-data:/app/data
+      - ./secret.json:/app/secret.json:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:20128/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  zen-router-data:
+    name: zen-router-data

@@ -1,0 +1,14 @@
+[build]
+# Fix macOS Xcode 15+ linker issue with proc-macro dylibs (mis-aligned LINKEDIT)
+# Use classic linker for proc-macro dylibs
+rustflags = ["-C", "link-arg=-Wl,-ld_classic"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-ld_classic"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-ld_classic"]
+
+# Force proc-macro crates to build with debug profile to avoid the linker issue
+[profile.release.build-override]
+opt-level = 1
