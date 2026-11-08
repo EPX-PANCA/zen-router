@@ -17,8 +17,7 @@ RUN apk add --no-cache \
 WORKDIR /build
 
 # Copy dependency files first for better cache
-COPY Cargo.toml ./
-COPY Cargo.lock ./
+COPY Cargo.toml Cargo.lock* ./
 
 # Create a dummy main.rs to compile dependencies
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs

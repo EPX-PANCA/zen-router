@@ -10,9 +10,6 @@
 *.dll
 *.exe
 
-# (Optional: include or ignore Cargo.lock based on preference)
-Cargo.lock
-
 # ============================================================
 # Environment & Secrets (Crucial)
 # ============================================================
