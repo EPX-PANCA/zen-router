@@ -11,10 +11,11 @@ use tokio::time::Instant;
 use tracing::{error, info, warn};
 
 use crate::proxy::transform::{
-    anthropic_to_turns, build_google_payload, extract_delta_from_google_chunk,
-    extract_text_from_google_response, google_chunk_to_anthropic_sse, google_chunk_to_openai_sse,
-    google_to_anthropic_response, google_to_openai_response, openai_to_turns, AnthropicRequest,
-    OpenAiRequest,
+    anthropic_to_turns, anthropic_tool_use_sse, build_google_payload, convert_tools_to_google,
+    extract_chunk_parts_from_google, extract_text_from_google_response,
+    google_chunk_to_anthropic_sse, google_chunk_to_openai_sse, google_to_anthropic_response,
+    google_to_openai_response, google_tool_chunk_to_openai_sse, openai_finish_sse, openai_to_turns,
+    AnthropicRequest, OpenAiRequest,
 };
 use crate::AppState;
 
@@ -81,6 +82,11 @@ pub async fn openai_chat_completions(
     let model = req.model.clone();
     let stream = req.stream.unwrap_or(false);
 
+    let (google_tools, google_tool_config) = convert_tools_to_google(
+        req.tools.as_deref(),
+        req.functions.as_deref(),
+        req.tool_choice.as_ref(),
+    );
     let (system_prompt, turns) = openai_to_turns(&req);
     let (backend_model, google_payload) = build_google_payload(
         &state.config.project_id,
@@ -89,9 +95,20 @@ pub async fn openai_chat_completions(
         &turns,
         req.temperature,
         req.max_tokens,
+        google_tools,
+        google_tool_config,
     );
 
-    proxy_request(state, google_payload, &backend_model, &model, stream, true, start).await
+    proxy_request(
+        state,
+        google_payload,
+        &backend_model,
+        &model,
+        stream,
+        true,
+        start,
+    )
+    .await
 }
 
 /// Handle Anthropic-compatible messages endpoint
@@ -108,6 +125,8 @@ pub async fn anthropic_messages(
     let model = req.model.clone();
     let stream = req.stream.unwrap_or(false);
 
+    let (google_tools, google_tool_config) =
+        convert_tools_to_google(req.tools.as_deref(), None, req.tool_choice.as_ref());
     let (system_prompt, turns) = anthropic_to_turns(&req);
     let (backend_model, google_payload) = build_google_payload(
         &state.config.project_id,
@@ -116,9 +135,20 @@ pub async fn anthropic_messages(
         &turns,
         req.temperature,
         Some(req.max_tokens),
+        google_tools,
+        google_tool_config,
     );
 
-    proxy_request(state, google_payload, &backend_model, &model, stream, false, start).await
+    proxy_request(
+        state,
+        google_payload,
+        &backend_model,
+        &model,
+        stream,
+        false,
+        start,
+    )
+    .await
 }
 
 fn estimate_prompt_tokens(google_payload: &Value) -> i64 {
@@ -133,10 +163,17 @@ fn estimate_prompt_tokens(google_payload: &Value) -> i64 {
                 for part in parts {
                     if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                         total_chars += text.len();
+                    } else if let Some(fc) = part.get("functionCall") {
+                        total_chars += fc.to_string().len();
+                    } else if let Some(fr) = part.get("functionResponse") {
+                        total_chars += fr.to_string().len();
                     }
                 }
             }
         }
+    }
+    if let Some(tools) = google_payload.get("request").and_then(|r| r.get("tools")) {
+        total_chars += tools.to_string().len();
     }
     ((total_chars / 4) + 1).max(1) as i64
 }
@@ -147,8 +184,14 @@ fn extract_usage_tokens(val: &Value) -> Option<(i64, i64)> {
         .or_else(|| val.get("response").and_then(|r| r.get("usageMetadata")));
 
     let meta = usage?;
-    let prompt = meta.get("promptTokenCount").and_then(|t| t.as_i64()).unwrap_or(0);
-    let candidates = meta.get("candidatesTokenCount").and_then(|t| t.as_i64()).unwrap_or(0);
+    let prompt = meta
+        .get("promptTokenCount")
+        .and_then(|t| t.as_i64())
+        .unwrap_or(0);
+    let candidates = meta
+        .get("candidatesTokenCount")
+        .and_then(|t| t.as_i64())
+        .unwrap_or(0);
     if prompt > 0 || candidates > 0 {
         Some((prompt, candidates))
     } else {
@@ -243,8 +286,8 @@ async fn handle_non_streaming(
     match result {
         Ok(resp) => {
             let estimated_prompt = estimate_prompt_tokens(&google_payload);
-            let (mut prompt_tokens, mut candidates_tokens) = extract_usage_tokens(&resp.body)
-                .unwrap_or((estimated_prompt, 0));
+            let (mut prompt_tokens, mut candidates_tokens) =
+                extract_usage_tokens(&resp.body).unwrap_or((estimated_prompt, 0));
 
             if prompt_tokens == 0 {
                 prompt_tokens = estimated_prompt;
@@ -400,6 +443,9 @@ async fn handle_streaming(
                 let mut prompt_tokens = 0i64;
                 let mut candidate_tokens = 0i64;
                 let mut streamed_chars = 0usize;
+                let mut has_tool_calls = false;
+                let mut tool_call_counter = 0usize;
+                let mut anthropic_block_0_closed = false;
 
                 futures::pin_mut!(byte_stream);
 
@@ -455,7 +501,9 @@ async fn handle_streaming(
                                                 if c > 0 { candidate_tokens = c; }
                                             }
 
-                                            if let Some(delta) = extract_delta_from_google_chunk(&val) {
+                                            let chunk_parts = extract_chunk_parts_from_google(&val);
+
+                                            if let Some(delta) = chunk_parts.text {
                                                 if !delta.is_empty() {
                                                     streamed_chars += delta.len();
                                                     if openai_format {
@@ -466,6 +514,52 @@ async fn handle_streaming(
                                                         yield Ok::<_, std::convert::Infallible>(sse_line);
                                                     }
                                                 }
+                                            }
+
+                                            for tc in chunk_parts.tool_calls {
+                                                has_tool_calls = true;
+                                                let name = tc.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                                let default_args = json!({});
+                                                let args = tc.get("args").unwrap_or(&default_args);
+                                                let call_id = format!(
+                                                    "call_{}",
+                                                    &uuid::Uuid::new_v4().to_string().replace('-', "")[..24]
+                                                );
+                                                if let Some(sig) = tc.get("thoughtSignature").and_then(|s| s.as_str()) {
+                                                    crate::proxy::transform::THOUGHT_SIGNATURE_CACHE.insert(call_id.clone(), sig.to_string());
+                                                }
+                                                streamed_chars += name.len() + 30;
+
+                                                if openai_format {
+                                                    let sse_line = google_tool_chunk_to_openai_sse(
+                                                        name,
+                                                        args,
+                                                        tool_call_counter,
+                                                        &call_id,
+                                                        &model_clone,
+                                                        &msg_id,
+                                                    );
+                                                    yield Ok::<_, std::convert::Infallible>(sse_line);
+                                                } else {
+                                                    if !anthropic_block_0_closed {
+                                                        yield Ok::<_, std::convert::Infallible>(format!(
+                                                            "event: content_block_stop\ndata: {}\n\n",
+                                                            json!({"type": "content_block_stop", "index": 0})
+                                                        ));
+                                                        anthropic_block_0_closed = true;
+                                                    }
+
+                                                    let anthropic_lines = anthropic_tool_use_sse(
+                                                        tool_call_counter + 1,
+                                                        &call_id,
+                                                        name,
+                                                        args,
+                                                    );
+                                                    for sse_l in anthropic_lines {
+                                                        yield Ok::<_, std::convert::Infallible>(sse_l);
+                                                    }
+                                                }
+                                                tool_call_counter += 1;
                                             }
                                         }
                                     }
@@ -490,7 +584,9 @@ async fn handle_streaming(
                                         if p > 0 { prompt_tokens = p; }
                                         if c > 0 { candidate_tokens = c; }
                                     }
-                                    if let Some(delta) = extract_delta_from_google_chunk(&val) {
+                                    let chunk_parts = extract_chunk_parts_from_google(&val);
+
+                                    if let Some(delta) = chunk_parts.text {
                                         if !delta.is_empty() {
                                             streamed_chars += delta.len();
                                             if openai_format {
@@ -501,6 +597,52 @@ async fn handle_streaming(
                                                 yield Ok::<_, std::convert::Infallible>(sse_line);
                                             }
                                         }
+                                    }
+
+                                    for tc in chunk_parts.tool_calls {
+                                        has_tool_calls = true;
+                                        let name = tc.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                        let default_args = json!({});
+                                        let args = tc.get("args").unwrap_or(&default_args);
+                                        let call_id = format!(
+                                            "call_{}",
+                                            &uuid::Uuid::new_v4().to_string().replace('-', "")[..24]
+                                        );
+                                        if let Some(sig) = tc.get("thoughtSignature").and_then(|s| s.as_str()) {
+                                            crate::proxy::transform::THOUGHT_SIGNATURE_CACHE.insert(call_id.clone(), sig.to_string());
+                                        }
+                                        streamed_chars += name.len() + 30;
+
+                                        if openai_format {
+                                            let sse_line = google_tool_chunk_to_openai_sse(
+                                                name,
+                                                args,
+                                                tool_call_counter,
+                                                &call_id,
+                                                &model_clone,
+                                                &msg_id,
+                                            );
+                                            yield Ok::<_, std::convert::Infallible>(sse_line);
+                                        } else {
+                                            if !anthropic_block_0_closed {
+                                                yield Ok::<_, std::convert::Infallible>(format!(
+                                                    "event: content_block_stop\ndata: {}\n\n",
+                                                    json!({"type": "content_block_stop", "index": 0})
+                                                ));
+                                                anthropic_block_0_closed = true;
+                                            }
+
+                                            let anthropic_lines = anthropic_tool_use_sse(
+                                                tool_call_counter + 1,
+                                                &call_id,
+                                                name,
+                                                args,
+                                            );
+                                            for sse_l in anthropic_lines {
+                                                yield Ok::<_, std::convert::Infallible>(sse_l);
+                                            }
+                                        }
+                                        tool_call_counter += 1;
                                     }
                                 }
                             }
@@ -516,15 +658,20 @@ async fn handle_streaming(
                 }
 
                 if openai_format {
+                    let finish_reason = if has_tool_calls { "tool_calls" } else { "stop" };
+                    yield Ok::<_, std::convert::Infallible>(openai_finish_sse(finish_reason, &model_clone, &msg_id));
                     yield Ok::<_, std::convert::Infallible>("data: [DONE]\n\n".to_string());
                 } else {
-                    yield Ok::<_, std::convert::Infallible>(format!(
-                        "event: content_block_stop\ndata: {}\n\n",
-                        json!({"type": "content_block_stop", "index": 0})
-                    ));
+                    if !anthropic_block_0_closed {
+                        yield Ok::<_, std::convert::Infallible>(format!(
+                            "event: content_block_stop\ndata: {}\n\n",
+                            json!({"type": "content_block_stop", "index": 0})
+                        ));
+                    }
+                    let stop_reason = if has_tool_calls { "tool_use" } else { "end_turn" };
                     yield Ok::<_, std::convert::Infallible>(format!(
                         "event: message_delta\ndata: {}\n\n",
-                        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": null}, "usage": {"output_tokens": candidate_tokens}})
+                        json!({"type": "message_delta", "delta": {"stop_reason": stop_reason, "stop_sequence": null}, "usage": {"output_tokens": candidate_tokens}})
                     ));
                     yield Ok::<_, std::convert::Infallible>(format!(
                         "event: message_stop\ndata: {}\n\n",

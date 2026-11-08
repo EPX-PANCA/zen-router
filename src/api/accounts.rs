@@ -78,6 +78,7 @@ pub struct AccountResponse {
     pub last_used: Option<String>,
     pub created_at: String,
     pub token_expires_in: Option<i64>,
+    pub cooldown_remaining_seconds: Option<i64>,
 }
 
 pub async fn list_accounts(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -86,16 +87,28 @@ pub async fn list_accounts(State(state): State<Arc<AppState>>) -> impl IntoRespo
             let now = chrono::Utc::now();
             let responses: Vec<AccountResponse> = accounts
                 .iter()
-                .map(|a| AccountResponse {
-                    id: a.id.clone(),
-                    email: a.email.clone(),
-                    is_active: a.is_active,
-                    request_count: a.request_count,
-                    error_count: a.error_count,
-                    health_score: a.health_score,
-                    last_used: a.last_used.map(|d| d.to_rfc3339()),
-                    created_at: a.created_at.to_rfc3339(),
-                    token_expires_in: a.token_expiry.map(|exp| (exp - now).num_seconds()),
+                .map(|a| {
+                    let cooldown_remaining = a.cooldown_until.and_then(|until| {
+                        let secs = (until - now).num_seconds();
+                        if secs > 0 {
+                            Some(secs)
+                        } else {
+                            None
+                        }
+                    });
+
+                    AccountResponse {
+                        id: a.id.clone(),
+                        email: a.email.clone(),
+                        is_active: a.is_active,
+                        request_count: a.request_count,
+                        error_count: a.error_count,
+                        health_score: a.health_score,
+                        last_used: a.last_used.map(|d| d.to_rfc3339()),
+                        created_at: a.created_at.to_rfc3339(),
+                        token_expires_in: a.token_expiry.map(|exp| (exp - now).num_seconds()),
+                        cooldown_remaining_seconds: cooldown_remaining,
+                    }
                 })
                 .collect();
 

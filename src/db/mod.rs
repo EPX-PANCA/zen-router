@@ -17,6 +17,7 @@ pub struct Account {
     pub last_used: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub health_score: f64,
+    pub cooldown_until: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -63,12 +64,19 @@ pub async fn init_db(pool: &SqlitePool) -> Result<()> {
             error_count INTEGER NOT NULL DEFAULT 0,
             last_used TEXT,
             created_at TEXT NOT NULL,
-            health_score REAL NOT NULL DEFAULT 100.0
+            health_score REAL NOT NULL DEFAULT 100.0,
+            cooldown_until TEXT
         )
         "#,
     )
     .execute(pool)
     .await?;
+
+    // Anti-ban migration: add cooldown_until column if missing from existing database
+    sqlx::query("ALTER TABLE accounts ADD COLUMN cooldown_until TEXT")
+        .execute(pool)
+        .await
+        .ok();
 
     sqlx::query(
         r#"
@@ -285,6 +293,42 @@ pub async fn deactivate_account(pool: &SqlitePool, account_id: &str) -> Result<(
         .bind(account_id)
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// Anti-Ban: Place account into cooldown to prevent hammering during rate limits
+pub async fn set_account_cooldown(pool: &SqlitePool, account_id: &str, cooldown_secs: i64) -> Result<()> {
+    let cooldown_until = (Utc::now() + chrono::Duration::seconds(cooldown_secs)).to_rfc3339();
+    sqlx::query(
+        "UPDATE accounts SET cooldown_until = ?, health_score = MAX(0.0, health_score - 40.0) WHERE id = ?"
+    )
+    .bind(cooldown_until)
+    .bind(account_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Anti-Ban: Periodically rehabilitate accounts whose cooldown has expired and restore health
+pub async fn rehabilitate_accounts(pool: &SqlitePool) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+
+    // 1. Clear expired cooldowns
+    sqlx::query(
+        "UPDATE accounts SET cooldown_until = NULL WHERE cooldown_until IS NOT NULL AND cooldown_until <= ?"
+    )
+    .bind(&now)
+    .execute(pool)
+    .await?;
+
+    // 2. Gradually heal health scores for active accounts that are healthy and not in cooldown
+    sqlx::query(
+        "UPDATE accounts SET health_score = MIN(100.0, health_score + 5.0) WHERE is_active = 1 AND health_score < 100.0 AND (cooldown_until IS NULL OR cooldown_until <= ?)"
+    )
+    .bind(&now)
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 

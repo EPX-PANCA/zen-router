@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bytes::Bytes;
 use futures::Stream;
+use rand::Rng;
 use reqwest::Client;
 use serde_json::Value;
 use std::pin::Pin;
@@ -18,6 +19,22 @@ pub struct UpstreamResponse {
     pub body: Value,
 }
 
+/// Anti-Ban: Subtly jitter request timings (25-75ms) to break microsecond machine burst patterns
+async fn apply_anti_burst_jitter() {
+    let jitter_ms = rand::thread_rng().gen_range(25..=75);
+    tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
+}
+
+/// Anti-Ban: Generate realistic Google Antigravity extension client headers
+/// Replaces `gl-rust/1.0` with authentic Electron/Node IDE client signatures
+fn get_antiban_headers() -> (String, String, String, String) {
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let user_agent = "antigravity/1.104.0 darwin/arm64".to_string();
+    let api_client = "gl-node/20.18.0 gccl/1.104.0".to_string();
+    (user_agent, api_client, session_id, request_id)
+}
+
 impl UpstreamClient {
     pub fn new(config: Config) -> Self {
         let client = Client::builder()
@@ -28,7 +45,7 @@ impl UpstreamClient {
         Self { client, config }
     }
 
-    /// Send a non-streaming request to the upstream API
+    /// Send a non-streaming request to the upstream API with Anti-Ban protection
     pub async fn send_request(
         &self,
         body: &Value,
@@ -37,13 +54,21 @@ impl UpstreamClient {
         let url = self.config.upstream_url(false);
         debug!("Sending request to upstream: {}", url);
 
+        // Anti-ban: smooth out rapid-fire bursts
+        apply_anti_burst_jitter().await;
+
+        let (user_agent, api_client, session_id, request_id) = get_antiban_headers();
+
         let response = self
             .client
             .post(&url)
             .bearer_auth(access_token)
             .header("Content-Type", "application/json")
-            .header("User-Agent", "antigravity/1.104.0 darwin/arm64")
-            .header("X-Goog-Api-Client", "gl-rust/1.0")
+            .header("User-Agent", user_agent)
+            .header("X-Goog-Api-Client", api_client)
+            .header("X-Client-Session-Id", session_id)
+            .header("X-Request-Id", request_id)
+            .header("X-Client-Version", "1.104.0")
             .json(body)
             .send()
             .await?;
@@ -52,7 +77,7 @@ impl UpstreamClient {
 
         if status == 429 {
             let error_body = response.text().await.unwrap_or_default();
-            warn!("Upstream rate limit (429): {}", error_body);
+            warn!("[Anti-Ban] Upstream rate limit (429): {}", error_body);
             return Err(anyhow::anyhow!("RATE_LIMIT:429: {}", error_body));
         }
 
@@ -66,7 +91,7 @@ impl UpstreamClient {
         Ok(UpstreamResponse { status, body })
     }
 
-    /// Send a streaming request and return the raw byte stream
+    /// Send a streaming request with Anti-Ban protection
     pub async fn send_streaming_request(
         &self,
         body: &Value,
@@ -75,14 +100,22 @@ impl UpstreamClient {
         let url = self.config.upstream_url(true);
         debug!("Sending streaming request to upstream: {}", url);
 
+        // Anti-ban: smooth out rapid-fire bursts
+        apply_anti_burst_jitter().await;
+
+        let (user_agent, api_client, session_id, request_id) = get_antiban_headers();
+
         let response = self
             .client
             .post(&url)
             .bearer_auth(access_token)
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
-            .header("User-Agent", "antigravity/1.104.0 darwin/arm64")
-            .header("X-Goog-Api-Client", "gl-rust/1.0")
+            .header("User-Agent", user_agent)
+            .header("X-Goog-Api-Client", api_client)
+            .header("X-Client-Session-Id", session_id)
+            .header("X-Request-Id", request_id)
+            .header("X-Client-Version", "1.104.0")
             .json(body)
             .send()
             .await?;
@@ -91,7 +124,7 @@ impl UpstreamClient {
 
         if status == 429 {
             let error_body = response.text().await.unwrap_or_default();
-            warn!("Upstream streaming rate limit (429): {}", error_body);
+            warn!("[Anti-Ban] Upstream streaming rate limit (429): {}", error_body);
             return Err(anyhow::anyhow!("RATE_LIMIT:429: {}", error_body));
         }
 

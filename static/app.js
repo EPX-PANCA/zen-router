@@ -174,9 +174,12 @@ function renderAccounts(accounts) {
   tbody.innerHTML = accounts.map(acc => {
     const health = Math.round(acc.health_score ?? 0);
     const healthColor = health > 60 ? '#22c55e' : health > 30 ? '#f59e0b' : '#ef4444';
-    const statusBadge = acc.is_active
+    let statusBadge = acc.is_active
       ? `<span class="badge badge-success">Active</span>`
       : `<span class="badge badge-inactive">Inactive</span>`;
+    if (acc.cooldown_remaining_seconds && acc.cooldown_remaining_seconds > 0) {
+      statusBadge = `<span class="badge" style="background:rgba(234,179,8,0.15);color:#eab308;border:1px solid rgba(234,179,8,0.3);" title="Cooldown Anti-Ban aktif">Cooldown (${acc.cooldown_remaining_seconds}s)</span>`;
+    }
     const lastUsed = acc.last_used ? timeAgo(acc.last_used) : 'Never';
     const tokenExpiry = acc.token_expires_in != null
       ? (acc.token_expires_in > 0 ? `${Math.round(acc.token_expires_in / 60)}m` : 'Expired')

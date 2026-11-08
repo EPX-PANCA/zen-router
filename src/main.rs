@@ -74,6 +74,18 @@ async fn main() -> Result<()> {
     db::init_db(&pool).await?;
     info!("Database initialized");
 
+    // Anti-Ban: Periodic health rehabilitation background task (runs every 60s)
+    let rehab_pool = pool.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            if let Err(e) = db::rehabilitate_accounts(&rehab_pool).await {
+                tracing::warn!("[Anti-Ban] Account rehabilitation error: {}", e);
+            }
+        }
+    });
+
     // Build HTTP client
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
