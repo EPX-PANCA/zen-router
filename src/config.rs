@@ -59,16 +59,6 @@ fn load_secret_json() -> Option<(String, String, Option<String>, Option<String>)
     None
 }
 
-pub fn default_antigravity_client_id() -> String {
-    ["1071006060591-", "tmhssin2h21lcre235vtolojh4g403ep", ".apps.googleusercontent.com"].concat()
-}
-
-pub fn default_antigravity_client_secret() -> String {
-    ["GOC", "SPX-", "K58FWR486LdLJ1mLB8sXC4z6qDAf"].concat()
-}
-
-pub const ANTIGRAVITY_DEFAULT_PROJECT_ID: &str = "rising-fact-p41fc";
-
 impl Config {
     pub fn from_env() -> Result<Self> {
         dotenvy::dotenv().ok();
@@ -78,17 +68,19 @@ impl Config {
             .parse::<u16>()
             .unwrap_or(20128);
 
-        let _secret_file_info = load_secret_json();
+        let secret_file_info = load_secret_json();
 
         let google_client_id = env::var("GOOGLE_CLIENT_ID")
             .ok()
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(default_antigravity_client_id);
+            .or_else(|| secret_file_info.as_ref().map(|s| s.0.clone()))
+            .ok_or_else(|| anyhow::anyhow!("GOOGLE_CLIENT_ID must be configured in .env"))?;
 
         let google_client_secret = env::var("GOOGLE_CLIENT_SECRET")
             .ok()
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(default_antigravity_client_secret);
+            .or_else(|| secret_file_info.as_ref().map(|s| s.1.clone()))
+            .ok_or_else(|| anyhow::anyhow!("GOOGLE_CLIENT_SECRET must be configured in .env"))?;
 
         let app_env = env::var("APP_ENV").unwrap_or_else(|_| "production".to_string());
         let public_base_url = env::var("PUBLIC_BASE_URL")
@@ -104,7 +96,8 @@ impl Config {
             .or_else(|_| env::var("GOOGLE_PROJECT_ID"))
             .ok()
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| ANTIGRAVITY_DEFAULT_PROJECT_ID.to_string());
+            .or_else(|| secret_file_info.as_ref().and_then(|s| s.3.clone()))
+            .ok_or_else(|| anyhow::anyhow!("PROJECT_ID must be configured in .env"))?;
 
         let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
             if std::path::Path::new("/.dockerenv").exists() || std::path::Path::new("/app/data").exists() {

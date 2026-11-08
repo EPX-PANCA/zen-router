@@ -17,7 +17,7 @@
   - Deduplikasi otomatis blok system prompt yang berulang
   - **Dynamic Thinking Budget**: Secara cerdas menyetel thinking level ke `LOW` untuk pertanyaan sederhana (< 160 karakter tanpa kode) guna menghemat 70% token penalaran & memangkas latency menjadi < 800ms, serta otomatis `HIGH` untuk pertanyaan koding kompleks
 - 🌐 **Universal Deployment (Localhost, Node IP, Domain & Cloudflare Tunnel)**:
-  - Berjalan mulus di `http://localhost:20128`, IP internal server, maupun domain publik `https://9r.alinlab.cloud`
+  - Berjalan mulus di `http://localhost:20128`, IP internal server, maupun domain publik (Cloudflare Tunnel)
   - Mendukung **Remote OAuth Callback Exchange**: Pengguna domain publik atau perangkat remote dapat menghubungkan akun Google tanpa perlu membuka localhost
 - 🎨 **Premium Modern Web Dashboard**:
   - Dark obsidian theme terinspirasi oleh Linear dan Vercel
@@ -208,7 +208,7 @@ curl http://localhost:20128/v1/messages \
 |---|---|---|
 | `PORT` | `20128` | Port server (sama dengan 9router) |
 | `APP_ENV` | `production` | Environment mode (`production` / `development`) |
-| `PUBLIC_BASE_URL` | `https://9r.alinlab.cloud` | Domain publik untuk auto-redirect & snippet updater |
+| `PUBLIC_BASE_URL` | `https://ai.yourdomain.com` | Domain publik untuk auto-redirect & snippet updater |
 | `GOOGLE_CLIENT_ID` | `(default built-in)` | Client ID Google Antigravity |
 | `GOOGLE_CLIENT_SECRET`| `(default built-in)` | Client Secret Google Antigravity |
 | `REDIRECT_URI` | `http://localhost:20128/api/oauth/callback` | Callback redirect URL |

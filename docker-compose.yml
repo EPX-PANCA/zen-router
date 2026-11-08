@@ -8,12 +8,12 @@ services:
       - "20128:20128"
     environment:
       - APP_ENV=${APP_ENV:-production}
-      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://9r.alinlab.cloud}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
       - PORT=20128
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - REDIRECT_URI=${REDIRECT_URI:-http://localhost:20128/api/oauth/callback}
-      - PROJECT_ID=${PROJECT_ID:-rising-fact-p41fc}
+      - PROJECT_ID=${PROJECT_ID}
       - DATABASE_URL=sqlite:/app/data/zen-router.db
       - SESSION_SECRET=${SESSION_SECRET:-change-me-in-production-use-random-string}
       - UPSTREAM_BASE_URL=${UPSTREAM_BASE_URL:-https://daily-cloudcode-pa.googleapis.com}
