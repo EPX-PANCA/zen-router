@@ -29,6 +29,10 @@ use router::account_pool::AccountPool;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const GIT_COMMIT: &str = env!("GIT_COMMIT_HASH");
+pub const BUILD_TIME: &str = env!("BUILD_TIME");
+
 pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub config: Config,
@@ -167,6 +171,7 @@ async fn main() -> Result<()> {
         .route("/api/stats", get(api::stats::get_stats))
         .route("/api/logs", get(api::stats::get_logs))
         .route("/api/quota", get(api::stats::get_quota))
+        .route("/api/version", get(api_version))
         .route("/api/debug/token", get(debug_token))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
@@ -189,7 +194,17 @@ async fn health_check() -> impl IntoResponse {
     Json(json!({
         "status": "ok",
         "service": "zen-router",
-        "version": "0.1.0"
+        "version": VERSION,
+        "commit": GIT_COMMIT,
+        "build_time": BUILD_TIME
+    }))
+}
+
+async fn api_version() -> impl IntoResponse {
+    Json(json!({
+        "version": VERSION,
+        "commit": GIT_COMMIT,
+        "build_time": BUILD_TIME
     }))
 }
 
@@ -235,4 +250,16 @@ async fn debug_token(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         }
     }
     Json(json!({"error": "no account"}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_version_and_build_info() {
+        assert_eq!(VERSION, "0.2.0");
+        assert!(!GIT_COMMIT.is_empty());
+        assert!(!BUILD_TIME.is_empty());
+    }
 }

@@ -12,12 +12,13 @@ RUN apk add --no-cache \
     build-base \
     sqlite-dev \
     sqlite-static \
+    git \
     perl
 
 WORKDIR /build
 
 # Copy dependency files first for better cache
-COPY Cargo.toml Cargo.lock* ./
+COPY Cargo.toml Cargo.lock* build.rs* ./
 
 # Create a dummy main.rs to compile dependencies
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs
@@ -26,9 +27,11 @@ RUN cargo build --release 2>&1 || true
 # Remove the dummy build artifacts
 RUN rm -f target/release/zen-router target/release/deps/zen_router*
 
-# Copy the actual source
+# Copy the actual source and git history for commit info
 COPY src ./src
 COPY static ./static
+COPY build.rs ./
+COPY .git ./.git
 
 # Build the actual binary
 ENV SQLX_OFFLINE=true

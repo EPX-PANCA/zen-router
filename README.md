@@ -1,54 +1,41 @@
-# ⚡ ZEN ROUTER
+# ⚡ ZEN ROUTER v0.2.0
 
-> **High-Performance AI Gateway & Multi-Account Proxy** written in Rust, designed for **Google Antigravity / Code Assist OAuth**, with a modern Web Dashboard, Client API Keys management, Real-time Quota Monitor, and full Docker support (similar to **9router**).
+> **High-Performance Enterprise AI Gateway & Multi-Account Proxy** written in Rust, designed for **Google Antigravity / Code Assist OAuth**, with a modern Web Dashboard, Client API Keys management, Real-time Quota Monitor, Anti-Ban Protection Suite, and full Docker support.
 
 ---
 
-## 🌟 Fitur Utama
+## 🌟 Fitur Utama (v0.2.0)
 
-- 🦀 **Rust Core (Axum 0.7 + Tokio + SQLx)**: Latensi sangat rendah (< 1ms proxy overhead), memory footprint kecil, dan streaming SSE ultra-cepat.
-- 🔐 **Google Antigravity OAuth 2.0 + PKCE**: Autentikasi langsung dengan akun Google menggunakan client ID resmi Google Antigravity.
-- 🔄 **Multi-Account Pool & Auto-Failover**:
-  - Pool banyak akun Google sekaligus
-  - Otomatis rotasi akun saat terkena `429 Too Many Requests` (Quota exhaustion)
-  - Health scoring per-akun (0 - 100%) dan auto token refresh
-- 🛡️ **Lossless Token Saver & Smart Thinking Budget**:
-  - Kompresi whitespace dan baris kosong berlebih tanpa merusak indentasi kode atau markdown
-  - Deduplikasi otomatis blok system prompt yang berulang
-  - **Dynamic Thinking Budget**: Secara cerdas menyetel thinking level ke `LOW` untuk pertanyaan sederhana (< 160 karakter tanpa kode) guna menghemat 70% token penalaran & memangkas latency menjadi < 800ms, serta otomatis `HIGH` untuk pertanyaan koding kompleks
-- 🌐 **Universal Deployment (Localhost, Node IP, Domain & Cloudflare Tunnel)**:
-  - Berjalan mulus di `http://localhost:20128`, IP internal server, maupun domain publik (Cloudflare Tunnel)
-  - Mendukung **Remote OAuth Callback Exchange**: Pengguna domain publik atau perangkat remote dapat menghubungkan akun Google tanpa perlu membuka localhost
-- 🎨 **Premium Modern Web Dashboard**:
-  - Dark obsidian theme terinspirasi oleh Linear dan Vercel
-  - Bebas dari emoji norak, menggunakan Vector SVG icons bersih
-  - Toast notifications instan tanpa dialog alert browser
-  - Interactive Playground dengan real-time SSE streaming dan latency timer
-- 🔑 **Client API Keys (Downstream Auth)**:
-  - Generate token akses berformat `zen-sk-...` untuk klien eksternal
-  - Amankan router agar hanya klien terverifikasi yang dapat memanggil model
-- ⚡ **Real-Time Quota Monitor**:
-  - Pantau kapasitas sisa kuota upstream Antigravity langsung dari dashboard (persentase & visual bar)
-  - Countdown reset waktu harian otomatis
-- 🔀 **Dual Protocol Bridge**:
-  - **OpenAI Compatible**: `POST /v1/chat/completions` (mendukung streaming SSE dan format chat)
-  - **Anthropic Compatible**: `POST /v1/messages` (kompatibel penuh dengan **Claude Code**)
-- 🤖 **Dynamic Models & Thinking Levels**:
-  - `gemini-2.5-flash`: **Ultra Fast (~650ms)** tanpa thinking (Rekomendasi untuk chat/coding instan)
-  - `gemini-3.8-flash-low`: **Fast (~1.5s)** dengan penalaran ringan
-  - `gemini-3.8-flash-medium`: **Balanced (~2.0s)**
-  - `gemini-3.8-flash-high`: **Deep Reasoning (~2.4s)** untuk analisis kompleks
-  - `gemini-2.5-pro`: Model reasoning kapasitas tinggi
-  - Alias kompatibilitas: `gpt-4o`, `claude-3-5-sonnet-20241022`, dll.
-- 📊 **Modern Web Dashboard & Interactive Playground**:
-  - Live statistics (Requests per minute, active accounts, success rate, token usage)
-  - Live Playground dengan real-time streaming SSE and latency timer
-  - Account manager (OAuth login, direct token import, pause/resume, delete)
-  - Tab Panduan Integrasi (Claude Code, Cursor/Cline, Python SDK, cURL)
-- 🐳 **Ready-to-run Docker**:
-  - Multi-stage Dockerfile berbasis Alpine (image ringan ~25MB)
-  - SQLite data persistence via Docker volume (`zen-router-data`)
-  - Health check otomatis
+- 🦀 **Rust Core + High-Performance Allocator (`mimalloc`)**:
+  - Menggunakan `mimalloc` buatan Microsoft untuk mengurangi alokasi memori hingga 40% dan mencegah fragmentasi memori pada streaming SSE chunk.
+  - Latensi proxy < 1ms, throughput tinggi, dan memory footprint minimal.
+- ⚡ **Zero-Disk In-Memory Account Caching**:
+  - Seluruh routing akun, pengecekan cooldown, dan pembacaan token dilakukan langsung di RAM (`RwLock<Vec<Account>>`).
+  - **0ms disk latency**: Database SQLite murni difungsikan sebagai persistent background storage.
+- 🛡️ **Anti-Ban Protection Suite**:
+  - **Header Camouflage**: Emulasi client resmi `gccl/1.104.0`, dynamic session IDs, dan `X-Client-Version`.
+  - **Sliding-Window Leaky Bucket**: Pembatasan otomatis maksimal 25 RPM per akun agar tidak menyentuh limit kuota Google.
+  - **Anti-Burst Micro-Jitter (5-20ms)**: Menghilangkan pola request robotik yang serentak.
+  - **Auto-Cooldown Isolation**: Akun yang terkena 429 otomatis diisolasi selama 60 detik agar kuota mendingin.
+  - **Auto-Rehabilitation Task**: Background task berkala yang memulihkan health score akun (+5% per menit).
+- 🔄 **Singleflight Anti-Stampede & Proactive Background Refresh**:
+  - Jika banyak request paralel masuk bersamaan pada akun yang tokennya kedaluwarsa, hanya 1 request yang memanggil Google OAuth (Anti-Stampede Mutex).
+  - Background task otomatis me-refresh token yang akan habis dalam 10 menit ke depan, sehingga user **tidak pernah menunggu proses token refresh**.
+- 🔁 **Full Transparent Failover (401, 429, 500..=504)**:
+  - Mengalihkan request secara instan dan transparan ke akun sehat lainnya bila terjadi rate limit, token kedaluwarsa, atau error server Google sebelum stream dimulai. IDE tidak akan menerima error.
+- 🛠️ **Full Tools & Function Calling**:
+  - Dukungan menyeluruh untuk OpenAI `tools`, `tool_choice`, legacy `functions`, dan Anthropic `tools`.
+  - **Gemini Thought Signature Memory**: Menyimpan opaque `thoughtSignature` secara in-memory untuk multi-turn tool calling agar tidak ditolak oleh model Gemini 2.0 / 3.0.
+- 🎛️ **Thinking Budget Control**:
+  - Terjemahan parameter `reasoning_effort` (OpenAI) dan `thinking` (Anthropic).
+  - Bisa mematikan thinking sepenuhnya (`budget: 0`) untuk respon secepat kilat atau mengatur kuota token penalaran.
+- 💰 **Quota Protection & Stream Cancellation**:
+  - Memutus stream upstream seketika dan mengirim frame HTTP/2 `RST_STREAM` ke Google jika user mengklik "Stop Generating" di IDE.
+- 🌐 **Persistent Connection Pooling & HTTP/2 Multiplexing**:
+  - Upstream keep-alive 120 detik, `tcp_nodelay(true)`, dan HTTP/2 active ping setiap 20 detik untuk mencegah koneksi diputus sepihak oleh firewall/Cloudflare.
+  - Byte-level SSE buffer parsing untuk mencegah karakter UTF-8 terpotong antar paket TCP.
+- 🏷️ **Live Build & Git Commit Tracking**:
+  - Footer dashboard dan endpoint `/api/version` menampilkan versi rilis dan Git commit hash secara real-time agar Anda selalu tahu status update server.
 
 ---
 
@@ -57,11 +44,11 @@
 ### 1. Menjalankan via Docker Compose (Rekomendasi)
 
 ```bash
-# Masuk ke direktori
-cd zen-router
+# Clone atau pull repository terbaru
+git pull origin main
 
-# Jalankan container di background
-docker compose up -d
+# Jalankan container di background dengan build ulang
+docker compose up -d --build
 
 # Cek logs
 docker compose logs -f
@@ -71,8 +58,6 @@ Buka Dashboard di browser:
 👉 **[http://localhost:20128](http://localhost:20128)**
 
 ### 2. Menjalankan secara Lokal (Native Rust)
-
-Jika ingin build & run secara lokal tanpa Docker:
 
 ```bash
 cargo run --release
@@ -84,14 +69,14 @@ Server akan aktif di `http://localhost:20128`.
 
 ## 🔑 Langkah Awal: Hubungkan Akun & Buat API Key
 
-1. **Buka Dashboard**: Buka `http://localhost:20128` di browser Anda.
+1. **Buka Dashboard**: Akses `http://localhost:20128` di browser Anda.
 2. **Hubungkan Akun Google**:
    - Klik tombol **"Add Google Account"** di kanan atas.
    - Login dengan akun Google Anda dan berikan izin akses.
-   - Status akun dan sisa kuota (misal: 74%) akan langsung tampil di Quota Monitor.
+   - Status akun, sisa kuota, dan badge kesehatan akan langsung tampil di Quota Monitor.
 3. **Generate API Key**:
    - Masuk ke bagian **Client API Keys**.
-   - Klik **+ Generate API Key**, beri nama (contoh: `Claude Code Key`).
+   - Klik **+ Generate API Key**, beri nama (contoh: `Cursor Key` atau `Claude Code`).
    - Salin token yang dihasilkan (`zen-sk-xxxx...`).
 
 ---
@@ -109,7 +94,7 @@ claude
 - **Provider**: `OpenAI Compatible`
 - **Base URL**: `http://localhost:20128/v1`
 - **API Key**: `zen-sk-your-token-here`
-- **Model**: `gemini-2.5-flash` (untuk kecepatan instan) atau `gemini-3.8-flash-high`
+- **Model**: `gemini-2.5-flash` (kecepatan kilat) atau `gemini-3.8-flash-high` (deep reasoning)
 
 ### 3. Python (OpenAI SDK)
 ```python
@@ -163,18 +148,16 @@ curl http://localhost:20128/v1/messages \
 
 ## ⚡ Panduan Model & Latency
 
-| Model ID | Level Thinking | Latency | Kategori Penggunaan |
+| Model ID | Level Thinking | Latency Rata-rata | Rekomendasi Penggunaan |
 | :--- | :--- | :--- | :--- |
-| **`gemini-2.5-flash`** | **None** | **~650 ms** ⚡ | **Paling Cepat / Rekomendasi Chat & Edit Instan** |
-| `gemini-3.5-flash-lite` | None | ~800 ms ⚡ | Ringan & hemat kuota |
-| `gemini-3.8-flash-low` | Low Thinking | ~1.500 ms 🚀 | Cepat dengan sedikit penalaran |
-| `gemini-3.8-flash-medium` | Medium Thinking | ~2.000 ms ⚖️ | Seimbang |
+| **`gemini-2.5-flash`** | **None** | **~650 ms** ⚡ | **Paling Cepat / Rekomendasi Chat, Edit & Autocomplete Instan** |
+| `gemini-3.5-flash-lite` | None | ~800 ms ⚡ | Hemat kuota token |
+| `gemini-3.8-flash-low` | Low Thinking | ~1.500 ms 🚀 | Cepat dengan penalaran ringan |
+| `gemini-3.8-flash-medium` | Medium Thinking | ~2.000 ms ⚖️ | Seimbang untuk tugas umum |
 | `gemini-3.8-flash-high` | High Thinking | ~2.400 ms 🧠 | Analisis arsitektur & logika rumit |
-| `gemini-2.5-pro` | None | ~1.200 ms 🌟 | Kapasitas model besar |
+| `gemini-2.5-pro` | None | ~1.200 ms 🌟 | Konteks kapasitas besar |
 | `gpt-4o` | Mapped to 3.8 High | ~2.400 ms | OpenAI compatibility alias |
 | `claude-3-5-sonnet-20241022` | Mapped to 3.8 High | ~2.400 ms | Anthropic compatibility alias |
-
-> **Catatan Latency:** Model dengan level *Thinking HIGH* memerlukan 2–3 detik karena server Google memproses ratusan token penalaran internal (*chain-of-thought*) sebelum mengeluarkan teks jawaban. Jika ingin respon secepat kilat, gunakan `gemini-2.5-flash`.
 
 ---
 
@@ -183,10 +166,11 @@ curl http://localhost:20128/v1/messages \
 | Method | Endpoint | Deskripsi |
 |---|---|---|
 | `GET` | `/` atau `/dashboard` | Modern Web Dashboard |
-| `GET` | `/health` | Health check endpoint |
-| `POST` | `/v1/chat/completions` | OpenAI format proxy endpoint (mendukung SSE stream) |
+| `GET` | `/health` | Health check endpoint (termasuk status, versi & commit hash) |
+| `GET` | `/api/version` | Versi, Git commit hash, dan build timestamp |
+| `POST` | `/v1/chat/completions` | OpenAI format proxy endpoint (mendukung Tools & SSE stream) |
 | `GET` | `/v1/models` | List model yang tersedia & metadata |
-| `POST` | `/v1/messages` | Anthropic format proxy endpoint |
+| `POST` | `/v1/messages` | Anthropic format proxy endpoint (mendukung Tools) |
 | `GET` | `/api/quota` | Real-time Antigravity upstream quota monitor |
 | `GET` | `/api/keys` | List client API keys |
 | `POST` | `/api/keys` | Generate client API key baru |

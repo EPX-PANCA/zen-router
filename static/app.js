@@ -6,11 +6,13 @@ const API_BASE = '';
 let refreshInterval = null;
 let cachedApiKeys = [];
 let modelsLoaded = false;
+let currentGitCommit = '';
 
 // ─── Init ────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
   updateDynamicSnippets();
+  fetchVersion();
   refreshAll();
   refreshInterval = setInterval(refreshAll, 5000);
 });
@@ -19,6 +21,44 @@ function updateDynamicSnippets() {
   const origin = window.location.origin;
   document.querySelectorAll('.code-block-content').forEach(block => {
     block.textContent = block.textContent.replaceAll('http://localhost:20128', origin);
+  });
+}
+
+async function fetchVersion() {
+  try {
+    const res = await fetch(`${API_BASE}/api/version`);
+    if (res.ok) {
+      const data = await res.json();
+      currentGitCommit = data.commit || '';
+      const versionStr = `v${data.version || '0.2.0'}`;
+
+      const headerVer = document.getElementById('headerVersion');
+      if (headerVer) headerVer.textContent = versionStr;
+
+      const footerVer = document.getElementById('footerVersion');
+      if (footerVer) footerVer.textContent = versionStr;
+
+      const footerCommit = document.getElementById('footerCommitHash');
+      if (footerCommit) {
+        footerCommit.textContent = data.commit ? `commit ${data.commit}` : 'commit dev';
+      }
+
+      const footerTime = document.getElementById('footerBuildTime');
+      if (footerTime && data.build_time) {
+        footerTime.textContent = `Built: ${data.build_time}`;
+      }
+    }
+  } catch (e) {
+    console.debug('Failed to fetch version info', e);
+  }
+}
+
+function copyCommitHash() {
+  if (!currentGitCommit) return;
+  navigator.clipboard.writeText(currentGitCommit).then(() => {
+    showToast(`Commit hash copied: ${currentGitCommit}`);
+  }).catch(() => {
+    showToast(`Commit: ${currentGitCommit}`);
   });
 }
 
