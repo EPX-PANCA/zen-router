@@ -42,6 +42,7 @@ impl UpstreamClient {
     pub fn new(config: Config) -> Self {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(300))
+            .connect_timeout(std::time::Duration::from_secs(15))
             // Connection Pooling & Persistent Warm Sockets
             .pool_max_idle_per_host(32)
             .pool_idle_timeout(Some(std::time::Duration::from_secs(120)))

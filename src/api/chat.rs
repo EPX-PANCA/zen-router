@@ -438,7 +438,7 @@ async fn handle_streaming(
             let account_id_clone = account_id.clone();
 
             let sse_stream = async_stream::stream! {
-                let mut buffer = String::new();
+                let mut raw_buffer: Vec<u8> = Vec::new();
                 let msg_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
                 let mut prompt_tokens = 0i64;
                 let mut candidate_tokens = 0i64;
@@ -475,17 +475,17 @@ async fn handle_streaming(
                 while let Some(chunk_result) = byte_stream.next().await {
                     match chunk_result {
                         Ok(bytes) => {
-                            buffer.push_str(&String::from_utf8_lossy(&bytes));
+                            raw_buffer.extend_from_slice(&bytes);
 
                             while let Some((event_end, delimiter_len)) = {
-                                if let Some(pos) = buffer.find("\r\n\r\n") {
+                                if let Some(pos) = raw_buffer.windows(4).position(|w| w == b"\r\n\r\n") {
                                     Some((pos, 4))
                                 } else {
-                                    buffer.find("\n\n").map(|pos| (pos, 2))
+                                    raw_buffer.windows(2).position(|w| w == b"\n\n").map(|pos| (pos, 2))
                                 }
                             } {
-                                let event_str = buffer[..event_end].to_string();
-                                buffer = buffer[event_end + delimiter_len..].to_string();
+                                let event_bytes: Vec<u8> = raw_buffer.drain(..event_end + delimiter_len).collect();
+                                let event_str = String::from_utf8_lossy(&event_bytes[..event_end]).to_string();
 
                                 for line in event_str.lines() {
                                     let trimmed = line.trim();
@@ -573,8 +573,9 @@ async fn handle_streaming(
                     }
                 }
 
-                if !buffer.trim().is_empty() {
-                    for line in buffer.lines() {
+                if !raw_buffer.is_empty() {
+                    let trailing_str = String::from_utf8_lossy(&raw_buffer).to_string();
+                    for line in trailing_str.lines() {
                         let trimmed = line.trim();
                         if let Some(rest) = trimmed.strip_prefix("data:") {
                             let rest = rest.trim();
@@ -698,8 +699,9 @@ async fn handle_streaming(
             Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/event-stream")
-                .header("Cache-Control", "no-cache")
+                .header("Cache-Control", "no-cache, no-transform")
                 .header("Connection", "keep-alive")
+                .header("X-Accel-Buffering", "no")
                 .body(axum::body::Body::from_stream(sse_stream))
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
