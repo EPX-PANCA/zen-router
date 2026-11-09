@@ -19,9 +19,12 @@ pub struct UpstreamResponse {
     pub body: Value,
 }
 
-/// Anti-Ban: Subtly jitter request timings (25-75ms) to break microsecond machine burst patterns
+/// Anti-Ban: Subtly jitter request timings (5-20ms) to break microsecond machine burst patterns without affecting latency
 async fn apply_anti_burst_jitter() {
-    let jitter_ms = rand::thread_rng().gen_range(25..=75);
+    if std::env::var("DISABLE_JITTER").map(|v| v == "1" || v == "true").unwrap_or(false) {
+        return;
+    }
+    let jitter_ms = rand::thread_rng().gen_range(5..=20);
     tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
 }
 
@@ -39,6 +42,16 @@ impl UpstreamClient {
     pub fn new(config: Config) -> Self {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(300))
+            // Connection Pooling & Persistent Warm Sockets
+            .pool_max_idle_per_host(32)
+            .pool_idle_timeout(Some(std::time::Duration::from_secs(120)))
+            .tcp_keepalive(Some(std::time::Duration::from_secs(60)))
+            .tcp_nodelay(true)
+            // HTTP/2 Multiplexing & Warm Keep-Alive
+            .http2_adaptive_window(true)
+            .http2_keep_alive_interval(Some(std::time::Duration::from_secs(20)))
+            .http2_keep_alive_timeout(std::time::Duration::from_secs(10))
+            .http2_keep_alive_while_idle(true)
             .build()
             .expect("Failed to build HTTP client");
 
