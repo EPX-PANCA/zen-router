@@ -35,3 +35,4 @@ parking_lot = "0.12"
 dashmap = "6"
 http = "1"
 mime = "0.3"
+mimalloc = { version = "0.1", default-features = false }

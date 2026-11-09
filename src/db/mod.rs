@@ -200,6 +200,7 @@ pub async fn upsert_account(
     }
 }
 
+#[allow(dead_code)]
 pub async fn get_active_accounts(pool: &SqlitePool) -> Result<Vec<Account>> {
     let accounts: Vec<Account> = sqlx::query_as(
         "SELECT * FROM accounts WHERE is_active = 1 ORDER BY health_score DESC, last_used ASC"

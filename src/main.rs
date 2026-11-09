@@ -26,6 +26,9 @@ use config::Config;
 use proxy::upstream::UpstreamClient;
 use router::account_pool::AccountPool;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub config: Config,
@@ -74,18 +77,6 @@ async fn main() -> Result<()> {
     db::init_db(&pool).await?;
     info!("Database initialized");
 
-    // Anti-Ban: Periodic health rehabilitation background task (runs every 60s)
-    let rehab_pool = pool.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            if let Err(e) = db::rehabilitate_accounts(&rehab_pool).await {
-                tracing::warn!("[Anti-Ban] Account rehabilitation error: {}", e);
-            }
-        }
-    });
-
     // Build HTTP client
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -97,8 +88,36 @@ async fn main() -> Result<()> {
         http_client.clone(),
     ));
 
-    // Build account pool
+    // Build account pool & pre-warm in-memory cache
     let account_pool = AccountPool::new(pool.clone(), oauth_flow);
+    if let Err(e) = account_pool.reload_cache().await {
+        tracing::warn!("Failed to pre-warm account cache: {}", e);
+    }
+
+    // Unified Background Task (runs every 60s):
+    // 1. Anti-Ban account health rehabilitation (+5% per min)
+    // 2. Proactive OAuth token refresh for accounts expiring in < 10 mins (0ms latency penalty for users)
+    // 3. Sync in-memory account cache with SQLite
+    let bg_pool = pool.clone();
+    let bg_account_pool = account_pool.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            if let Err(e) = db::rehabilitate_accounts(&bg_pool).await {
+                tracing::warn!("[Anti-Ban] Account rehabilitation error: {}", e);
+            }
+            if let Ok(count) = bg_account_pool.refresh_expiring_tokens().await {
+                if count > 0 {
+                    tracing::info!(
+                        "[Proactive-Refresh] Proactively refreshed {} account tokens",
+                        count
+                    );
+                }
+            }
+            bg_account_pool.reload_cache().await.ok();
+        }
+    });
 
     // Build upstream client
     let upstream = UpstreamClient::new(config.clone());

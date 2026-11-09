@@ -95,6 +95,18 @@ impl UpstreamClient {
             return Err(anyhow::anyhow!("RATE_LIMIT:429: {}", error_body));
         }
 
+        if status == 401 {
+            let error_body = response.text().await.unwrap_or_default();
+            warn!("[Auth Error] Upstream 401 Unauthorized: {}", error_body);
+            return Err(anyhow::anyhow!("AUTH_ERROR:401: {}", error_body));
+        }
+
+        if (500..=599).contains(&status) {
+            let error_body = response.text().await.unwrap_or_default();
+            warn!("[Server Error] Upstream {}: {}", status, error_body);
+            return Err(anyhow::anyhow!("SERVER_ERROR:{}: {}", status, error_body));
+        }
+
         if !response.status().is_success() {
             let error_body = response.text().await.unwrap_or_default();
             warn!("Upstream error {}: {}", status, error_body);
@@ -140,6 +152,18 @@ impl UpstreamClient {
             let error_body = response.text().await.unwrap_or_default();
             warn!("[Anti-Ban] Upstream streaming rate limit (429): {}", error_body);
             return Err(anyhow::anyhow!("RATE_LIMIT:429: {}", error_body));
+        }
+
+        if status == 401 {
+            let error_body = response.text().await.unwrap_or_default();
+            warn!("[Auth Error] Upstream streaming 401 Unauthorized: {}", error_body);
+            return Err(anyhow::anyhow!("AUTH_ERROR:401: {}", error_body));
+        }
+
+        if (500..=599).contains(&status) {
+            let error_body = response.text().await.unwrap_or_default();
+            warn!("[Server Error] Upstream streaming {}: {}", status, error_body);
+            return Err(anyhow::anyhow!("SERVER_ERROR:{}: {}", status, error_body));
         }
 
         if !response.status().is_success() {

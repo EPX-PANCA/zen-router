@@ -161,6 +161,7 @@ pub async fn oauth_callback(
     .await
     {
         Ok(account) => {
+            state.account_pool.reload_cache().await.ok();
             info!("Successfully added/updated account: {}", account.email);
             let redirect_target = state.config.public_base_url.as_deref().unwrap_or("/");
             Html(format!(
@@ -311,6 +312,7 @@ pub async fn oauth_exchange_code(
     .await
     {
         Ok(account) => {
+            state.account_pool.reload_cache().await.ok();
             info!("Successfully added/updated account via manual code exchange: {}", account.email);
             Json(json!({
                 "success": true,

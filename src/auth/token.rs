@@ -1,10 +1,15 @@
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
+use dashmap::DashMap;
 use sqlx::SqlitePool;
+use std::sync::{Arc, LazyLock};
+use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::auth::oauth::OAuthFlow;
 use crate::db;
+
+static REFRESH_LOCKS: LazyLock<DashMap<String, Arc<Mutex<()>>>> = LazyLock::new(DashMap::new);
 
 /// Check if a token is expired or will expire within the next 5 minutes
 pub fn is_token_expired(expiry: Option<DateTime<Utc>>) -> bool {
@@ -14,7 +19,17 @@ pub fn is_token_expired(expiry: Option<DateTime<Utc>>) -> bool {
     }
 }
 
-/// Attempt to refresh an account's token if needed
+/// Check if a token will expire within the next 10 minutes (for proactive background refresh)
+pub fn is_token_expiring_soon(expiry: Option<DateTime<Utc>>) -> bool {
+    match expiry {
+        None => false,
+        Some(expiry) => Utc::now() + Duration::minutes(10) >= expiry,
+    }
+}
+
+/// Attempt to refresh an account's token if needed with Anti-Stampede (Singleflight) protection.
+/// If multiple requests hit an expired account simultaneously, only 1 calls Google OAuth,
+/// while the other requests wait and reuse the refreshed token.
 pub async fn ensure_fresh_token(
     pool: &SqlitePool,
     account_id: &str,
@@ -30,8 +45,24 @@ pub async fn ensure_fresh_token(
         }
     }
 
-    // Token expired, refresh it
-    info!("Refreshing token for account {}", account_id);
+    // Anti-Stampede Singleflight: acquire per-account mutex
+    let lock = REFRESH_LOCKS
+        .entry(account_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone();
+
+    let _guard = lock.lock().await;
+
+    // Double-checked locking: check if another concurrent task just refreshed it while we were waiting
+    let accounts = db::get_all_accounts(pool).await?;
+    if let Some(acc) = accounts.iter().find(|a| a.id == account_id) {
+        if !is_token_expired(acc.token_expiry) {
+            return Ok(acc.access_token.clone());
+        }
+    }
+
+    // Token is indeed expired, refresh it with Google OAuth
+    info!("[Anti-Stampede] Refreshing token for account {}", account_id);
     let token_resp = oauth_flow.refresh_token(refresh_token).await?;
 
     let new_expiry = token_resp
@@ -40,11 +71,12 @@ pub async fn ensure_fresh_token(
 
     db::update_account_token(pool, account_id, &token_resp.access_token, new_expiry).await?;
 
-    info!("Token refreshed successfully for account {}", account_id);
+    info!("[Anti-Stampede] Token refreshed successfully for account {}", account_id);
     Ok(token_resp.access_token)
 }
 
 /// Get a valid access token for an account, refreshing if needed
+#[allow(dead_code)]
 pub async fn get_valid_token(
     pool: &SqlitePool,
     account_id: &str,

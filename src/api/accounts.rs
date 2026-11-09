@@ -45,20 +45,23 @@ pub async fn create_account(
     )
     .await
     {
-        Ok(account) => (
-            StatusCode::CREATED,
-            Json(json!({
-                "success": true,
-                "message": "Account created or updated successfully",
-                "account": {
-                    "id": account.id,
-                    "email": account.email,
-                    "is_active": account.is_active,
-                    "health_score": account.health_score,
-                }
-            })),
-        )
-            .into_response(),
+        Ok(account) => {
+            state.account_pool.reload_cache().await.ok();
+            (
+                StatusCode::CREATED,
+                Json(json!({
+                    "success": true,
+                    "message": "Account created or updated successfully",
+                    "account": {
+                        "id": account.id,
+                        "email": account.email,
+                        "is_active": account.is_active,
+                        "health_score": account.health_score,
+                    }
+                })),
+            )
+                .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
@@ -130,7 +133,10 @@ pub async fn delete_account(
     Path(account_id): Path<String>,
 ) -> impl IntoResponse {
     match crate::db::delete_account(&state.db, &account_id).await {
-        Ok(_) => Json(json!({"success": true, "message": "Account deleted"})).into_response(),
+        Ok(_) => {
+            state.account_pool.reload_cache().await.ok();
+            Json(json!({"success": true, "message": "Account deleted"})).into_response()
+        }
         Err(e) => {
             error!("Failed to delete account {}: {}", account_id, e);
             (
@@ -160,12 +166,15 @@ pub async fn toggle_account(
                 .await;
 
                 match result {
-                    Ok(_) => Json(json!({
-                        "success": true,
-                        "is_active": new_state,
-                        "message": if new_state { "Account activated" } else { "Account deactivated" }
-                    }))
-                    .into_response(),
+                    Ok(_) => {
+                        state.account_pool.reload_cache().await.ok();
+                        Json(json!({
+                            "success": true,
+                            "is_active": new_state,
+                            "message": if new_state { "Account activated" } else { "Account deactivated" }
+                        }))
+                        .into_response()
+                    }
                     Err(e) => (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({"error": e.to_string()})),

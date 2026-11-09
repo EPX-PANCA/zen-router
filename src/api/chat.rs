@@ -12,7 +12,7 @@ use tracing::{error, info, warn};
 
 use crate::proxy::transform::{
     anthropic_to_turns, anthropic_tool_use_sse, build_google_payload, convert_tools_to_google,
-    extract_chunk_parts_from_google, extract_text_from_google_response,
+    extract_chunk_parts_from_google, extract_text_from_google_response, extract_thinking_budget,
     google_chunk_to_anthropic_sse, google_chunk_to_openai_sse, google_to_anthropic_response,
     google_to_openai_response, google_tool_chunk_to_openai_sse, openai_finish_sse, openai_to_turns,
     AnthropicRequest, OpenAiRequest,
@@ -88,6 +88,7 @@ pub async fn openai_chat_completions(
         req.tool_choice.as_ref(),
     );
     let (system_prompt, turns) = openai_to_turns(&req);
+    let thinking_budget = extract_thinking_budget(req.reasoning_effort.as_deref(), None);
     let (backend_model, google_payload) = build_google_payload(
         &state.config.project_id,
         &model,
@@ -97,6 +98,7 @@ pub async fn openai_chat_completions(
         req.max_tokens,
         google_tools,
         google_tool_config,
+        thinking_budget,
     );
 
     proxy_request(
@@ -128,6 +130,7 @@ pub async fn anthropic_messages(
     let (google_tools, google_tool_config) =
         convert_tools_to_google(req.tools.as_deref(), None, req.tool_choice.as_ref());
     let (system_prompt, turns) = anthropic_to_turns(&req);
+    let thinking_budget = extract_thinking_budget(None, req.thinking.as_ref());
     let (backend_model, google_payload) = build_google_payload(
         &state.config.project_id,
         &model,
@@ -137,6 +140,7 @@ pub async fn anthropic_messages(
         Some(req.max_tokens),
         google_tools,
         google_tool_config,
+        thinking_budget,
     );
 
     proxy_request(
@@ -322,35 +326,33 @@ async fn handle_non_streaming(
         Err(e) => {
             let error_msg = e.to_string();
 
-            if error_msg.starts_with("RATE_LIMIT:") {
-                warn!("Rate limit hit, rotating account");
-                match state.account_pool.handle_rate_limit(&account_id).await {
-                    Ok(Some((alt_account, alt_token))) => {
-                        return Box::pin(handle_non_streaming(
-                            state,
-                            alt_account.id,
-                            backend_model,
-                            original_model,
-                            google_payload,
-                            alt_token,
-                            openai_format,
-                            start,
-                        ))
-                        .await;
-                    }
-                    _ => {}
+            // Intelligent Transparent Failover (429 Rate Limit, 401 Auth Error, 5xx Server Error)
+            let is_failover_eligible = error_msg.starts_with("RATE_LIMIT:")
+                || error_msg.starts_with("AUTH_ERROR:")
+                || error_msg.starts_with("SERVER_ERROR:");
+
+            if is_failover_eligible {
+                warn!(
+                    "[Failover] Upstream issue detected: {}. Attempting failover to healthy account.",
+                    error_msg
+                );
+                if let Ok(Some((alt_account, alt_token))) = state
+                    .account_pool
+                    .handle_failover(&account_id, &error_msg)
+                    .await
+                {
+                    return Box::pin(handle_non_streaming(
+                        state,
+                        alt_account.id,
+                        backend_model,
+                        original_model,
+                        google_payload,
+                        alt_token,
+                        openai_format,
+                        start,
+                    ))
+                    .await;
                 }
-                let detail = error_msg.trim_start_matches("RATE_LIMIT:429:").trim();
-                let msg = if detail.is_empty() {
-                    "Rate limit exceeded on all accounts".to_string()
-                } else {
-                    format!("Rate limit exceeded: {}", detail)
-                };
-                return (
-                    StatusCode::TOO_MANY_REQUESTS,
-                    Json(json!({"error": {"message": msg, "type": "rate_limit_error"}})),
-                )
-                    .into_response();
             }
 
             state.account_pool.record_error(&account_id).await.ok();
@@ -367,9 +369,17 @@ async fn handle_non_streaming(
             .await
             .ok();
 
+            let (status_code, error_type) = if error_msg.starts_with("RATE_LIMIT:") {
+                (StatusCode::TOO_MANY_REQUESTS, "rate_limit_error")
+            } else if error_msg.starts_with("AUTH_ERROR:") {
+                (StatusCode::UNAUTHORIZED, "authentication_error")
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, "upstream_error")
+            };
+
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": {"message": error_msg, "type": "upstream_error"}})),
+                status_code,
+                Json(json!({"error": {"message": error_msg, "type": error_type}})),
             )
                 .into_response()
         }
@@ -394,40 +404,46 @@ async fn handle_streaming(
     match result {
         Err(e) => {
             let error_msg = e.to_string();
-            if error_msg.starts_with("RATE_LIMIT:") {
-                match state.account_pool.handle_rate_limit(&account_id).await {
-                    Ok(Some((alt_account, alt_token))) => {
-                        return Box::pin(handle_streaming(
-                            state,
-                            alt_account.id,
-                            backend_model,
-                            original_model,
-                            google_payload,
-                            alt_token,
-                            openai_format,
-                            start,
-                        ))
-                        .await;
-                    }
-                    _ => {}
+            let is_failover_eligible = error_msg.starts_with("RATE_LIMIT:")
+                || error_msg.starts_with("AUTH_ERROR:")
+                || error_msg.starts_with("SERVER_ERROR:");
+
+            if is_failover_eligible {
+                warn!(
+                    "[Failover] Upstream streaming issue: {}. Attempting failover to healthy account.",
+                    error_msg
+                );
+                if let Ok(Some((alt_account, alt_token))) = state
+                    .account_pool
+                    .handle_failover(&account_id, &error_msg)
+                    .await
+                {
+                    return Box::pin(handle_streaming(
+                        state,
+                        alt_account.id,
+                        backend_model,
+                        original_model,
+                        google_payload,
+                        alt_token,
+                        openai_format,
+                        start,
+                    ))
+                    .await;
                 }
-                let detail = error_msg.trim_start_matches("RATE_LIMIT:429:").trim();
-                let msg = if detail.is_empty() {
-                    "Rate limit exceeded on all accounts".to_string()
-                } else {
-                    format!("Rate limit exceeded: {}", detail)
-                };
-                return (
-                    StatusCode::TOO_MANY_REQUESTS,
-                    Json(json!({"error": {"message": msg, "type": "rate_limit_error"}})),
-                )
-                    .into_response();
             }
 
             state.account_pool.record_error(&account_id).await.ok();
+            let (status_code, error_type) = if error_msg.starts_with("RATE_LIMIT:") {
+                (StatusCode::TOO_MANY_REQUESTS, "rate_limit_error")
+            } else if error_msg.starts_with("AUTH_ERROR:") {
+                (StatusCode::UNAUTHORIZED, "authentication_error")
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, "upstream_error")
+            };
+
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": {"message": error_msg}})),
+                status_code,
+                Json(json!({"error": {"message": error_msg, "type": error_type}})),
             )
                 .into_response()
         }

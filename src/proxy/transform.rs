@@ -51,6 +51,8 @@ pub struct OpenAiRequest {
     pub functions: Option<Vec<Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function_call: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 // ============================================================
@@ -82,6 +84,8 @@ pub struct AnthropicRequest {
     pub tools: Option<Vec<Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Value>,
 }
 
 // ============================================================
@@ -678,6 +682,39 @@ fn merge_consecutive_turns(raw_turns: Vec<ChatTurn>) -> Vec<ChatTurn> {
     merged
 }
 
+/// Extract thinking budget (token count or 0 to disable) from OpenAI or Anthropic parameters
+pub fn extract_thinking_budget(
+    reasoning_effort: Option<&str>,
+    anthropic_thinking: Option<&Value>,
+) -> Option<i64> {
+    if let Some(effort) = reasoning_effort {
+        match effort.to_lowercase().as_str() {
+            "none" | "0" | "disabled" | "false" => return Some(0),
+            "low" => return Some(1024),
+            "medium" => return Some(2048),
+            "high" => return Some(8192),
+            other => {
+                if let Ok(val) = other.parse::<i64>() {
+                    return Some(val);
+                }
+            }
+        }
+    }
+
+    if let Some(th) = anthropic_thinking {
+        if let Some(t_type) = th.get("type").and_then(|t| t.as_str()) {
+            if t_type == "disabled" {
+                return Some(0);
+            }
+        }
+        if let Some(budget) = th.get("budget_tokens").and_then(|b| b.as_i64()) {
+            return Some(budget);
+        }
+    }
+
+    None
+}
+
 /// Build the Google Antigravity / Code Assist payload
 pub fn build_google_payload(
     project_id: &str,
@@ -688,6 +725,7 @@ pub fn build_google_payload(
     max_tokens: Option<i64>,
     google_tools: Option<Value>,
     google_tool_config: Option<Value>,
+    thinking_budget: Option<i64>,
 ) -> (String, Value) {
     let (backend_model, base_thinking_level) = resolve_model_and_thinking(model);
 
@@ -753,7 +791,11 @@ pub fn build_google_payload(
                 .any(|p| p.get("functionCall").is_some() || p.get("functionResponse").is_some())
         });
 
-    if !has_tools {
+    if let Some(budget) = thinking_budget {
+        generation_config["thinkingConfig"] = json!({
+            "thinkingBudget": budget
+        });
+    } else if !has_tools {
         if let Some(level) = thinking_level {
             let level_upper = match level.to_lowercase().as_str() {
                 "high" => "HIGH",
@@ -1266,6 +1308,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(
             payload_simple["request"]["generationConfig"]["thinkingConfig"]["thinkingLevel"],
@@ -1285,11 +1328,45 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(
             payload_code["request"]["generationConfig"]["thinkingConfig"]["thinkingLevel"],
             "HIGH"
         );
+
+        // Test explicit thinking budget: 0 to disable thinking completely
+        let (_, payload_disabled) = build_google_payload(
+            "proj-1",
+            "gemini-3.8-flash",
+            None,
+            &code_turns,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        );
+        assert_eq!(
+            payload_disabled["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            0
+        );
+    }
+
+    #[test]
+    fn test_extract_thinking_budget_mappings() {
+        assert_eq!(extract_thinking_budget(Some("none"), None), Some(0));
+        assert_eq!(extract_thinking_budget(Some("0"), None), Some(0));
+        assert_eq!(extract_thinking_budget(Some("low"), None), Some(1024));
+        assert_eq!(extract_thinking_budget(Some("medium"), None), Some(2048));
+        assert_eq!(extract_thinking_budget(Some("high"), None), Some(8192));
+        assert_eq!(extract_thinking_budget(Some("4096"), None), Some(4096));
+
+        let anthropic_disabled = json!({"type": "disabled"});
+        assert_eq!(extract_thinking_budget(None, Some(&anthropic_disabled)), Some(0));
+
+        let anthropic_enabled = json!({"type": "enabled", "budget_tokens": 5000});
+        assert_eq!(extract_thinking_budget(None, Some(&anthropic_enabled)), Some(5000));
     }
 
     #[test]
